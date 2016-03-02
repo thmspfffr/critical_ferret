@@ -1,0 +1,195 @@
+%% COMPUTE WHOLE BRAIN DFA IN SOURCE SPACE
+% pconn_src_dfa
+
+clear all
+
+% --------------------------------------------------------
+% VERSION 1
+% --------------------------------------------------------
+v         = 1;
+foi       = [2 4; 4 8; 8 12; 12 24; 24 48; 48 96; 96 192];
+fit_interv = [1 15];
+calc_interv = [.8 25];
+% --------------------------------------------------------
+
+
+restoredefaultpath
+
+addpath /home/tpfeffer/Documents/MATLAB/toolboxes/NBT-ReleaseNBTRC4a/
+
+indir   = '/home/tpfeffer/critical_ferret/data/LFP_channels/';
+outdir   = '/home/tpfeffer/critical_ferret/proc/dfa/';
+% mridir = '/home/gnolte/neuconn/mri_data/';
+plotdir = '/home/tpfeffer/critical_ferret/proc/plots/';
+
+run ~/Documents/MATLAB/toolboxes/NBT-NBTv0.5.3-alpha/installNBT.m
+%%
+
+for isubj = 1 : 1
+  for ifoi = 1 : length(foi)
+    
+    if ~exist(sprintf([outdir 'cf_dfa_s%d_f%d_v%d_processing.txt'],isubj,ifoi,v))
+      system(['touch ' outdir sprintf('cf_dfa_s%d_f%d_v%d_processing.txt',isubj,ifoi,v)]);
+    else
+      continue
+    end
+    
+    for ichan = 1 : 64
+      load([indir sprintf('LFP_3_EU64L_%d.mat',ichan)])
+      
+      disp(sprintf('Processing ferret %d, channel %d, freq f%d ...', isubj,ichan,ifoi))
+      
+      siginfo = nbt_Info;
+      siginfo.converted_sample_frequency = lfpFs;
+      
+      % compute bp-filtered signal
+      ampenv = nbt_filter_fir(LFP,foi(ifoi,1),foi(ifoi,2),siginfo.converted_sample_frequency,4);
+      
+      ampenv1=abs(hilbert(ampenv));
+      
+      
+      clear ampenv
+      
+      % compute DFA
+      tmp  = nbt_doDFA(ampenv1, siginfo, fit_interv,calc_interv,0.5,0,0,[]);
+      expo(ifoi,ichan) = tmp.MarkerValues;
+    end
+    
+    save(sprintf([outdir 'cf_dfa_s%d_f%d_v%d.mat'],isubj,ifoi,v),'expo','-v7.3');
+    clear expo tmp
+    
+  end
+end
+
+
+%%
+isubj = 1;
+
+for ifoi = 1 : length(foi)
+  for ichan = 1 : 64
+    load(sprintf([outdir 'cf_dfa_s%d_f%d_v%d.mat'],isubj,ifoi,v));
+    ex(ifoi,ichan) = expo(ifoi,ichan); clear expo
+  end
+end
+
+figure; set(gcf,'color','white');
+
+plot(nanmean(ex,2),'.','MarkerSize',40);
+axis([0.5 7.5 0.5 1])
+box off
+title('DFA exponent'); xlabel('Frequency of interest'); ylabel('DFA exp');
+
+
+%% E/I balance
+
+nwin = 30;
+
+for isubj = 1 : 1
+  for ifoi = 1 : length(foi)
+    
+    if ~exist(sprintf([outdir 'cf_ei_s%d_f%d_v%d_processing.txt'],isubj,ifoi,v))
+      system(['touch ' outdir sprintf('cf_ei_s%d_f%d_v%d_processing.txt',isubj,ifoi,v)]);
+    else
+      continue
+    end
+    
+    fprintf('Computing E-I-Balance for freq%d ...\n',ifoi);
+    
+    for ichan = 1 : 64
+      load([indir sprintf('LFP_3_EU64L_%d.mat',ichan)]);
+      data(:,ichan) = LFP;
+    end
+    
+    siginfo = nbt_Info;
+    siginfo.converted_sample_frequency = lfpFs;
+    
+    eplen   = size(LFP,1);
+    seglen  = floor(180*lfpFs);
+    segshift = floor(0.1*seglen);
+    
+    nep   = 1;
+    nseg  = floor((eplen-seglen)/segshift+1);
+    
+    for itime = 1 : nwin
+      
+      fprintf('Computing amplitude envelope for seg%d ...\n',itime);
+      
+      dat              = data((itime-1)*segshift+1:(itime-1)*segshift+seglen,:);
+      ampenv           = nbt_filter_fir(dat,foi(ifoi,1),foi(ifoi,2),siginfo.converted_sample_frequency,4);
+      ampenv           = abs(hilbert(ampenv));
+      
+      fprintf('Computing DFA for seg%d ...\n',itime);
+      
+      tmp              = nbt_doDFA(ampenv, siginfo, fit_interv,calc_interv,0.5,0,0,[]);
+      
+      ei.expo(itime,:)    = tmp.MarkerValues;
+      ei.amp(itime,:)     = mean(ampenv);
+      
+      clear ampenv tmp dat
+      
+    end
+    
+    save(sprintf([outdir 'cf_ei_s%d_f%d_v%d.mat'],isubj,ifoi,v),'ei','-v7.3');
+    
+    
+  end
+end
+
+%% PLOT E/I BALANCE
+v = 1;
+figure; set(gcf,'color','white');
+
+for isubj = 1 : 1
+  for ifoi = 1 : length(foi)
+    
+    load(sprintf([outdir 'cf_ei_s%d_f%d_v%d.mat'],isubj,ifoi,v));
+    
+    for ichan = 1 : 64
+      r(ichan,ifoi) = corr(ei.expo(:,ichan),ei.amp(:,ichan));
+    end
+    
+    subplot(2,4,ifoi);
+    [xi yi zi] = cf_interpECOG(r(:,ifoi),'cubic');
+    zi(zi==0)=NaN;
+    h=imagesc(zi); 
+    set(h,'alphadata',~isnan(zi)); box off
+    clear xi yi zi
+    
+    colorbar 
+        title(sprintf('FREQ: %d Hz - %d Hz',foi(ifoi,1),foi(ifoi,2)))
+axis off
+  end
+end
+  
+
+
+%% PLOT DFA
+
+
+v = 1;
+figure; set(gcf,'color','white');
+
+for isubj = 1 : 1
+  for ifoi = 1 : length(foi)
+    
+    for ichan = 1 : 64
+      load(sprintf([outdir 'cf_dfa_s%d_f%d_v%d.mat'],isubj,ifoi,v));
+      ex(ifoi,ichan) = expo(ifoi,ichan); clear expo
+    end
+    
+    subplot(3,3,ifoi);
+    [xi yi zi] = cf_interpECOG(ex(ifoi,:),'cubic');
+    zi(zi==0)=NaN;
+    h=imagesc(zi);     
+    set(h,'alphadata',~isnan(zi)); box off
+    clear xi yi zi
+    
+    colorbar 
+        title(sprintf('FREQ: %d Hz - %d Hz',foi(ifoi,1),foi(ifoi,2)))
+
+    
+  end
+end
+
+  
+
